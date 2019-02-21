@@ -1,0 +1,6 @@
+notebooks/.ipynb_checkpoints/
+notebooks/tmp/
+python/__pycache__/
+python/cython/build/
+python/cython/cdelineate.c
+python/cython/cdelineate.cpython-36m-x86_64-linux-gnu.so
