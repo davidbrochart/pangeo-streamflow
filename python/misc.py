@@ -1,4 +1,5 @@
 import numpy as np
+import pandas as pd
 import xarray as xr
 from skimage.measure import block_reduce
 from shapely.geometry.polygon import Polygon
@@ -209,11 +210,11 @@ def get_precipitation(from_time=datetime(2000, 3, 1, 12), to_time=datetime(2019,
         p_trmm = get_trmm_precipitation(da_trmm_mask)
         p_trmm = p_trmm.sel(time=slice(from_time, to_time_trmm)).sum(['label'])
         p_trmm = p_trmm.compute().to_series()
-        # TRMM is 3-hourly, resample to 30min and interpolate
+        # TRMM is 3-hourly, resample to 30min and interpolate with -15min to be like GPM
         p_trmm = p_trmm.resample('30min').asfreq()
         not_nan = np.isfinite(p_trmm.values)
         idx = np.arange(len(p_trmm))
-        p_trmm[:] = np.interp(idx, idx[not_nan], p_trmm.values[not_nan])
+        p_trmm[:] = np.interp(idx-0.5, idx[not_nan], p_trmm.values[not_nan]) # -0.5 translates to -30min/2 = -15min
     if to_time > gpm_start_time:
         # take GPM
         print('Getting GPM precipitation from ' + str(from_time_gpm) + ' to ' + str(to_time))
