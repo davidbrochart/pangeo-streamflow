@@ -5,6 +5,7 @@ from shapely.geometry.polygon import Polygon
 from shapely.ops import transform
 import pyproj
 import gcsfs
+from datetime import datetime
 
 def adjust_bbox(da, dims):
     coords = {}
@@ -168,7 +169,6 @@ def get_trmm_precipitation(da_mask_trmm):
     da_mask_trmm = da_area_trmm.reindex_like(da_mask_trmm, method='nearest', tolerance=0.001) * da_mask_trmm
     da_mask_trmm = da_mask_trmm / da_mask_trmm.sum(['lat', 'lon'])
     p_trmm = (da_trmm.reindex_like(da_mask_trmm, method='nearest', tolerance=0.001) * da_mask_trmm).sum(['lat', 'lon'])
-    p_trmm = p_trmm.persist()
     return p_trmm
 
 def get_gpm_precipitation(da_mask_gpm):
@@ -179,5 +179,53 @@ def get_gpm_precipitation(da_mask_gpm):
     da_mask_gpm = da_area_gpm.reindex_like(da_mask_gpm, method='nearest', tolerance=0.001) * da_mask_gpm
     da_mask_gpm = da_mask_gpm / da_mask_gpm.sum(['lat', 'lon'])
     p_gpm = (da_gpm.reindex_like(da_mask_gpm, method='nearest', tolerance=0.01) * da_mask_gpm).sum(['lat', 'lon'])
-    p_gpm = p_gpm.persist()
     return p_gpm
+
+def get_precipitation(from_time=datetime(2000, 3, 1, 12), to_time=datetime(2019, 1, 1), freq='30min', labels=['0'], gcs_path='pangeo-data/ws_mask/amazonas'):
+    if type(from_time) is str:
+        try:
+            from_time = datetime.strptime(from_time, '%Y-%m-%d %H:%M:%S')
+        except ValueError:
+            from_time = datetime.strptime(from_time, '%Y-%m-%d')
+    if type(to_time) is str:
+        try:
+            to_time = datetime.strptime(to_time, '%Y-%m-%d %H:%M:%S')
+        except ValueError:
+            to_time = datetime.strptime(to_time, '%Y-%m-%d')
+    trmm_start_time = datetime(2000, 3, 1, 12)
+    gpm_start_time = datetime(2014, 3, 12)
+    from_time_gpm = from_time
+    p_trmm = None
+    p_gpm = None
+    if from_time < gpm_start_time:
+        # before GPM, take TRMM
+        if to_time > gpm_start_time:
+            to_time_trmm = gpm_start_time
+            from_time_gpm = gpm_start_time
+        else:
+            to_time_trmm = to_time
+        print('Getting TRMM precipitation from ' + str(from_time) + ' to ' + str(to_time_trmm))
+        da_trmm_mask = get_trmm_mask(labels, gcs_path)
+        p_trmm = get_trmm_precipitation(da_trmm_mask)
+        p_trmm = p_trmm.sel(time=slice(from_time, to_time_trmm)).sum(['label'])
+        p_trmm = p_trmm.compute().to_series()
+        # TRMM is 3-hourly, resample to 30min and interpolate
+        p_trmm = p_trmm.resample('30min').asfreq()
+        not_nan = np.isfinite(p_trmm.values)
+        idx = np.arange(len(p_trmm))
+        p_trmm[:] = np.interp(idx, idx[not_nan], p_trmm.values[not_nan])
+    if to_time > gpm_start_time:
+        # take GPM
+        print('Getting GPM precipitation from ' + str(from_time_gpm) + ' to ' + str(to_time))
+        da_gpm_mask = get_gpm_mask(labels, gcs_path)
+        p_gpm = get_gpm_precipitation(da_gpm_mask)
+        p_gpm = p_gpm.sel(time=slice(from_time_gpm, to_time)).sum(['label'])
+        p_gpm = p_gpm.compute().to_series()
+    if (p_trmm is not None) and (p_gpm is not None):
+        print('Concatenating')
+        precipitation = pd.concat([p_trmm, p_gpm])
+    elif p_trmm is not None:
+        precipitation = p_trmm
+    else:
+        precipitation = p_gpm
+    return precipitation
