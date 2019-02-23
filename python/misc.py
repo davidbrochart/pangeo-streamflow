@@ -6,7 +6,7 @@ from shapely.geometry.polygon import Polygon
 from shapely.ops import transform
 import pyproj
 import gcsfs
-from datetime import datetime
+from datetime import datetime, timedelta
 
 def adjust_bbox(da, dims):
     coords = {}
@@ -209,7 +209,7 @@ def str2datetime(s):
     else:
         return s
 
-def get_precipitation(from_time=datetime(2000, 3, 1, 12), to_time=datetime(2019, 1, 1), freq='30min', labels=['0'], gcs_path='pangeo-data/ws_mask/amazonas'):
+def get_precipitation(from_time=datetime(2000, 3, 1, 12), to_time=datetime(2019, 1, 1), labels=['0'], gcs_path='pangeo-data/ws_mask/amazonas'):
     from_time = str2datetime(from_time)
     to_time = str2datetime(to_time)
     trmm_start_time = datetime(2000, 3, 1, 12)
@@ -234,6 +234,8 @@ def get_precipitation(from_time=datetime(2000, 3, 1, 12), to_time=datetime(2019,
         not_nan = np.isfinite(p_trmm.values)
         idx = np.arange(len(p_trmm))
         p_trmm[:] = np.interp(idx-0.5, idx[not_nan], p_trmm.values[not_nan]) # -0.5 translates to -30min/2 = -15min
+        p_trmm.index = p_trmm.index - timedelta(minutes=15)
+        p_trmm = p_trmm[:-1]
     if to_time > gpm_start_time:
         # take GPM
         print('Getting GPM precipitation from ' + str(from_time_gpm) + ' to ' + str(to_time))
@@ -250,7 +252,7 @@ def get_precipitation(from_time=datetime(2000, 3, 1, 12), to_time=datetime(2019,
         precipitation = p_gpm
     return precipitation
 
-def get_pet(from_time=datetime(2000, 3, 1, 12), to_time=datetime(2019, 1, 1), freq='30min', labels=['0'], gcs_path='pangeo-data/ws_mask/amazonas'):
+def get_pet(from_time, to_time, freq='30min', labels=['0'], gcs_path='pangeo-data/ws_mask/amazonas'):
     from_time = str2datetime(from_time)
     to_time = str2datetime(to_time)
     da_pet_mask = get_pet_mask(labels, gcs_path)
