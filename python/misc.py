@@ -136,8 +136,8 @@ def get_trmm_mask(labels, gcs_path):
         da2 = adjust_bbox(da1, {'lat': (pix_deg_trmm, -pix_deg_flow), 'lon': (pix_deg_trmm, pix_deg_flow)})
         da3 = aggregate_da(da2, {'lat': ratio, 'lon': ratio}) / (ratio * ratio)
         da3 = da3.rename({'lat_agg': 'lat', 'lon_agg': 'lon'})
-        da3.lon.values = np.round(da3.lon.values, 3)
-        da3.lat.values = np.round(da3.lat.values, 3)
+        da3.lon.values = np.round(da3.lon.values / pix_deg_trmm, 1) * pix_deg_trmm
+        da3.lat.values = np.round(da3.lat.values / pix_deg_trmm, 1) * pix_deg_trmm
         da_mask_trmm.append(da3)
     da_mask_trmm = xr.concat(da_mask_trmm, 'label').assign_coords(label=labels)
     return da_mask_trmm
@@ -153,11 +153,28 @@ def get_gpm_mask(labels, gcs_path):
         da2 = adjust_bbox(da1, {'lat': (pix_deg_gpm, -pix_deg_flow), 'lon': (pix_deg_gpm, pix_deg_flow)})
         da3 = aggregate_da(da2, {'lat': ratio, 'lon': ratio}) / (ratio * ratio)
         da3 = da3.rename({'lat_agg': 'lat', 'lon_agg': 'lon'})
-        da3.lon.values = np.round(da3.lon.values, 2)
-        da3.lat.values = np.round(da3.lat.values, 2)
+        da3.lon.values = np.round(da3.lon.values / pix_deg_gpm, 1) * pix_deg_gpm
+        da3.lat.values = np.round(da3.lat.values / pix_deg_gpm, 1) * pix_deg_gpm
         da_mask_gpm.append(da3)
     da_mask_gpm = xr.concat(da_mask_gpm, 'label').assign_coords(label=labels)
     return da_mask_gpm
+
+def get_pet_mask(labels, gcs_path):
+    pix_deg_flow = 1 / 1200
+    pix_deg_pet = 1 / 120
+    ratio = int(pix_deg_pet / pix_deg_flow)
+    da_mask_pet = []
+    for label in labels:
+        ds = xr.open_zarr(gcsfs.GCSMap(f'{gcs_path}/{label}'))
+        da1 = ds['mask'].compute()
+        da2 = adjust_bbox(da1, {'lat': (pix_deg_pet, -pix_deg_flow), 'lon': (pix_deg_pet, pix_deg_flow)})
+        da3 = aggregate_da(da2, {'lat': ratio, 'lon': ratio}) / (ratio * ratio)
+        da3 = da3.rename({'lat_agg': 'lat', 'lon_agg': 'lon'})
+        da3.lon.values = np.round(da3.lon.values / pix_deg_pet, 1) * pix_deg_pet
+        da3.lat.values = np.round(da3.lat.values / pix_deg_pet, 1) * pix_deg_pet
+        da_mask_pet.append(da3)
+    da_mask_pet = xr.concat(da_mask_pet, 'label').assign_coords(label=labels)
+    return da_mask_pet
 
 def get_trmm_precipitation(da_mask_trmm):
     ds_trmm = xr.open_zarr(gcsfs.GCSMap('pangeo-data/trmm_3b42rt'))
@@ -177,22 +194,24 @@ def get_gpm_precipitation(da_mask_gpm):
     da_gpm = ds_gpm['precipitationCal']
     pix_deg_gpm = 0.1
     da_area_gpm = pixel_area(pix_deg_gpm)
-    da_mask_gpm = da_area_gpm.reindex_like(da_mask_gpm, method='nearest', tolerance=0.001) * da_mask_gpm
+    da_mask_gpm = da_area_gpm.reindex_like(da_mask_gpm, method='nearest', tolerance=0.01) * da_mask_gpm
     da_mask_gpm = da_mask_gpm / da_mask_gpm.sum(['lat', 'lon'])
     p_gpm = (da_gpm.reindex_like(da_mask_gpm, method='nearest', tolerance=0.01) * da_mask_gpm).sum(['lat', 'lon'])
     return p_gpm
 
+def str2datetime(s):
+    if type(s) is str:
+        try:
+            st = datetime.strptime(s, '%Y-%m-%d %H:%M:%S')
+        except ValueError:
+            st = datetime.strptime(s, '%Y-%m-%d')
+        return st
+    else:
+        return s
+
 def get_precipitation(from_time=datetime(2000, 3, 1, 12), to_time=datetime(2019, 1, 1), freq='30min', labels=['0'], gcs_path='pangeo-data/ws_mask/amazonas'):
-    if type(from_time) is str:
-        try:
-            from_time = datetime.strptime(from_time, '%Y-%m-%d %H:%M:%S')
-        except ValueError:
-            from_time = datetime.strptime(from_time, '%Y-%m-%d')
-    if type(to_time) is str:
-        try:
-            to_time = datetime.strptime(to_time, '%Y-%m-%d %H:%M:%S')
-        except ValueError:
-            to_time = datetime.strptime(to_time, '%Y-%m-%d')
+    from_time = str2datetime(from_time)
+    to_time = str2datetime(to_time)
     trmm_start_time = datetime(2000, 3, 1, 12)
     gpm_start_time = datetime(2014, 3, 12)
     from_time_gpm = from_time
@@ -230,3 +249,21 @@ def get_precipitation(from_time=datetime(2000, 3, 1, 12), to_time=datetime(2019,
     else:
         precipitation = p_gpm
     return precipitation
+
+def get_pet(from_time=datetime(2000, 3, 1, 12), to_time=datetime(2019, 1, 1), freq='30min', labels=['0'], gcs_path='pangeo-data/ws_mask/amazonas'):
+    from_time = str2datetime(from_time)
+    to_time = str2datetime(to_time)
+    da_pet_mask = get_pet_mask(labels, gcs_path)
+    ds_pet = xr.open_zarr(gcsfs.GCSMap('pangeo-data/cgiar_pet'))
+    da_pet = ds_pet['PET']
+    pix_deg_pet = 1 / 120
+    da_area_pet = pixel_area(pix_deg_pet)
+    da_pet_mask = da_area_pet.reindex_like(da_pet_mask, method='nearest', tolerance=0.000001) * da_pet_mask
+    da_pet_mask = da_pet_mask / da_pet_mask.sum(['lat', 'lon'])
+    pet = (da_pet.reindex_like(da_pet_mask, method='nearest', tolerance=0.000001) * da_pet_mask).sum(['lat', 'lon'])
+    pet = pet.sum(['label']).compute()
+    date_range = pd.date_range(start=from_time, end=to_time, freq=freq)
+    pet_over_time = pd.Series(index=date_range)
+    for month in range(1, 13):
+        pet_over_time.loc[date_range.month==month] = pet.sel(month=month).values / 30 / 24
+    return pet_over_time
