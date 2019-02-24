@@ -235,7 +235,7 @@ def get_precipitation(from_time=datetime(2000, 3, 1, 12), to_time=datetime(2019,
         idx = np.arange(len(p_trmm))
         p_trmm[:] = np.interp(idx-0.5, idx[not_nan], p_trmm.values[not_nan]) # -0.5 translates to -30min/2 = -15min
         p_trmm.index = p_trmm.index - timedelta(minutes=15)
-        p_trmm = p_trmm[:-1]
+        p_trmm = p_trmm[1:]
     if to_time > gpm_start_time:
         # take GPM
         print('Getting GPM precipitation from ' + str(from_time_gpm) + ' to ' + str(to_time))
@@ -252,7 +252,7 @@ def get_precipitation(from_time=datetime(2000, 3, 1, 12), to_time=datetime(2019,
         precipitation = p_gpm
     return precipitation
 
-def get_pet(from_time, to_time, freq='30min', labels=['0'], gcs_path='pangeo-data/ws_mask/amazonas'):
+def get_pet(from_time, to_time, labels=['0'], gcs_path='pangeo-data/ws_mask/amazonas'):
     from_time = str2datetime(from_time)
     to_time = str2datetime(to_time)
     da_pet_mask = get_pet_mask(labels, gcs_path)
@@ -264,7 +264,7 @@ def get_pet(from_time, to_time, freq='30min', labels=['0'], gcs_path='pangeo-dat
     da_pet_mask = da_pet_mask / da_pet_mask.sum(['lat', 'lon'])
     pet = (da_pet.reindex_like(da_pet_mask, method='nearest', tolerance=0.000001) * da_pet_mask).sum(['lat', 'lon'])
     pet = pet.sum(['label']).compute()
-    date_range = pd.date_range(start=from_time, end=to_time, freq=freq)
+    date_range = pd.date_range(start=from_time+timedelta(minutes=15), end=to_time, freq='30min')
     pet_over_time = pd.Series(index=date_range)
     for month in range(1, 13):
         pet_over_time.loc[date_range.month==month] = pet.sel(month=month).values / 30 / 24
