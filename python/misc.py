@@ -50,25 +50,31 @@ def aggregate_da(da, agg_dims, suf='_agg'):
         da_out.coords[dim + suf] = (dim + suf, new_coord)
     return da_out
 
-def reindex(arrays, dims):
-    tolerance = 0.1 * pix_deg_flow
+def concat(arrays, array_dims, concat_dim, pix_deg):
+    tolerance = 0.1 * pix_deg
     vmin, vmax = {}, {}
-    for d in dims:
+    for d in array_dims:
         vmin[d] = np.inf
         vmax[d] = -np.inf
     for da in arrays:
         this_vmin, this_vmax = {}, {}
-        for d in dims:
+        for d in array_dims:
             vmin[d] = min(vmin[d], np.min(da[d]).values)
             vmax[d] = max(vmax[d], np.max(da[d]).values)
     coord = {}
-    for d in dims:
+    for d in array_dims:
         if arrays[0][d].values[1] - arrays[0][d].values[0] > 0: # increasing
-            coord[d] = np.arange(vmin[d], vmax[d]+tolerance, pix_deg_flow)
+            coord[d] = np.arange(vmin[d], vmax[d]+tolerance, pix_deg)
         else:
-            coord[d] = np.arange(vmax[d], vmin[d]-tolerance, -pix_deg_flow)
-    for i in range(len(arrays)):
-        arrays[i] = arrays[i].reindex({d: coord[d] for d in dims}, method='nearest', tolerance=tolerance)
+            coord[d] = np.arange(vmax[d], vmin[d]-tolerance, -pix_deg)
+    for i, da in enumerate(arrays):
+        da_reindex = da.reindex({d: coord[d] for d in array_dims}, method='nearest', tolerance=tolerance)
+        if i == 0:
+            da_concat = da_reindex
+        else:
+            da_concat = xr.concat(da_concat, da_reindex, dim)
+        del da_reindex
+    return da_concat
 
 # pixel area only depends on latitude (not longitude)
 # we re-project WGS84 to cylindrical equal area
@@ -129,52 +135,59 @@ def get_trmm_mask(labels, gcs_path):
     pix_deg_flow = 1 / 1200
     pix_deg_trmm = 0.25
     ratio = int(pix_deg_trmm / pix_deg_flow)
-    da_mask_trmm = []
+    ds = xr.open_zarr(gcsfs.GCSMap(gcs_path))
+    da1 = None
     for label in labels:
-        ds = xr.open_zarr(gcsfs.GCSMap(f'{gcs_path}/{label}'))
-        da1 = ds['mask'].compute()
-        da2 = adjust_bbox(da1, {'lat': (pix_deg_trmm, -pix_deg_flow), 'lon': (pix_deg_trmm, pix_deg_flow)})
-        da3 = aggregate_da(da2, {'lat': ratio, 'lon': ratio}) / (ratio * ratio)
-        da3 = da3.rename({'lat_agg': 'lat', 'lon_agg': 'lon'})
-        da3.lon.values = np.round(da3.lon.values / pix_deg_trmm, 1) * pix_deg_trmm
-        da3.lat.values = np.round(da3.lat.values / pix_deg_trmm, 1) * pix_deg_trmm
-        da_mask_trmm.append(da3)
-    da_mask_trmm = xr.concat(da_mask_trmm, 'label').assign_coords(label=labels)
-    return da_mask_trmm
+        da = ds[label].compute()
+        if da1 is None:
+            da1 = da
+        else:
+            da1 += da
+    da2 = adjust_bbox(da1, {'lat': (pix_deg_trmm, -pix_deg_flow), 'lon': (pix_deg_trmm, pix_deg_flow)})
+    da3 = aggregate_da(da2, {'lat': ratio, 'lon': ratio}) / (ratio * ratio)
+    da3 = da3.rename({'lat_agg': 'lat', 'lon_agg': 'lon'})
+    da3.lon.values = np.round(da3.lon.values / pix_deg_trmm, 1) * pix_deg_trmm
+    da3.lat.values = np.round(da3.lat.values / pix_deg_trmm, 1) * pix_deg_trmm
+    return da3
 
 def get_gpm_mask(labels, gcs_path):
     pix_deg_flow = 1 / 1200
     pix_deg_gpm = 0.1
     ratio = int(pix_deg_gpm / pix_deg_flow)
     da_mask_gpm = []
+    ds = xr.open_zarr(gcsfs.GCSMap(gcs_path))
+    da1 = None
     for label in labels:
-        ds = xr.open_zarr(gcsfs.GCSMap(f'{gcs_path}/{label}'))
-        da1 = ds['mask'].compute()
-        da2 = adjust_bbox(da1, {'lat': (pix_deg_gpm, -pix_deg_flow), 'lon': (pix_deg_gpm, pix_deg_flow)})
-        da3 = aggregate_da(da2, {'lat': ratio, 'lon': ratio}) / (ratio * ratio)
-        da3 = da3.rename({'lat_agg': 'lat', 'lon_agg': 'lon'})
-        da3.lon.values = np.round(da3.lon.values / pix_deg_gpm, 1) * pix_deg_gpm
-        da3.lat.values = np.round(da3.lat.values / pix_deg_gpm, 1) * pix_deg_gpm
-        da_mask_gpm.append(da3)
-    da_mask_gpm = xr.concat(da_mask_gpm, 'label').assign_coords(label=labels)
-    return da_mask_gpm
+        da = ds[label].compute()
+        if da1 is None:
+            da1 = da
+        else:
+            da1 += da
+    da2 = adjust_bbox(da1, {'lat': (pix_deg_gpm, -pix_deg_flow), 'lon': (pix_deg_gpm, pix_deg_flow)})
+    da3 = aggregate_da(da2, {'lat': ratio, 'lon': ratio}) / (ratio * ratio)
+    da3 = da3.rename({'lat_agg': 'lat', 'lon_agg': 'lon'})
+    da3.lon.values = np.round(da3.lon.values / pix_deg_gpm, 1) * pix_deg_gpm
+    da3.lat.values = np.round(da3.lat.values / pix_deg_gpm, 1) * pix_deg_gpm
+    return da3
 
 def get_pet_mask(labels, gcs_path):
     pix_deg_flow = 1 / 1200
     pix_deg_pet = 1 / 120
     ratio = int(pix_deg_pet / pix_deg_flow)
-    da_mask_pet = []
+    ds = xr.open_zarr(gcsfs.GCSMap(gcs_path))
+    da1 = None
     for label in labels:
-        ds = xr.open_zarr(gcsfs.GCSMap(f'{gcs_path}/{label}'))
-        da1 = ds['mask'].compute()
-        da2 = adjust_bbox(da1, {'lat': (pix_deg_pet, -pix_deg_flow), 'lon': (pix_deg_pet, pix_deg_flow)})
-        da3 = aggregate_da(da2, {'lat': ratio, 'lon': ratio}) / (ratio * ratio)
-        da3 = da3.rename({'lat_agg': 'lat', 'lon_agg': 'lon'})
-        da3.lon.values = np.round(da3.lon.values / pix_deg_pet, 1) * pix_deg_pet
-        da3.lat.values = np.round(da3.lat.values / pix_deg_pet, 1) * pix_deg_pet
-        da_mask_pet.append(da3)
-    da_mask_pet = xr.concat(da_mask_pet, 'label').assign_coords(label=labels)
-    return da_mask_pet
+        da = ds[label].compute()
+        if da1 is None:
+            da1 = da
+        else:
+            da1 += da
+    da2 = adjust_bbox(da1, {'lat': (pix_deg_pet, -pix_deg_flow), 'lon': (pix_deg_pet, pix_deg_flow)})
+    da3 = aggregate_da(da2, {'lat': ratio, 'lon': ratio}) / (ratio * ratio)
+    da3 = da3.rename({'lat_agg': 'lat', 'lon_agg': 'lon'})
+    da3.lon.values = np.round(da3.lon.values / pix_deg_pet, 1) * pix_deg_pet
+    da3.lat.values = np.round(da3.lat.values / pix_deg_pet, 1) * pix_deg_pet
+    return da3
 
 def get_trmm_precipitation(da_mask_trmm):
     ds_trmm = xr.open_zarr(gcsfs.GCSMap('pangeo-data/trmm_3b42rt'))
@@ -227,7 +240,7 @@ def get_precipitation(from_time=datetime(2000, 3, 1, 12), to_time=datetime(2019,
         print('Getting TRMM precipitation from ' + str(from_time) + ' to ' + str(to_time_trmm))
         da_trmm_mask = get_trmm_mask(labels, gcs_path)
         p_trmm = get_trmm_precipitation(da_trmm_mask)
-        p_trmm = p_trmm.sel(time=slice(from_time, to_time_trmm)).sum(['label'])
+        p_trmm = p_trmm.sel(time=slice(from_time, to_time_trmm))
         p_trmm = p_trmm.compute().to_series()
         # TRMM is 3-hourly, resample to 30min and interpolate with -15min to be like GPM
         p_trmm = p_trmm.resample('30min').asfreq()
@@ -241,7 +254,7 @@ def get_precipitation(from_time=datetime(2000, 3, 1, 12), to_time=datetime(2019,
         print('Getting GPM precipitation from ' + str(from_time_gpm) + ' to ' + str(to_time))
         da_gpm_mask = get_gpm_mask(labels, gcs_path)
         p_gpm = get_gpm_precipitation(da_gpm_mask)
-        p_gpm = p_gpm.sel(time=slice(from_time_gpm, to_time)).sum(['label'])
+        p_gpm = p_gpm.sel(time=slice(from_time_gpm, to_time))
         p_gpm = p_gpm.compute().to_series()
     if (p_trmm is not None) and (p_gpm is not None):
         print('Concatenating')
@@ -262,8 +275,8 @@ def get_pet(from_time, to_time, labels=['0'], gcs_path='pangeo-data/ws_mask/amaz
     da_area_pet = pixel_area(pix_deg_pet)
     da_pet_mask = da_area_pet.reindex_like(da_pet_mask, method='nearest', tolerance=0.000001) * da_pet_mask
     da_pet_mask = da_pet_mask / da_pet_mask.sum(['lat', 'lon'])
-    pet = (da_pet.reindex_like(da_pet_mask, method='nearest', tolerance=0.000001) * da_pet_mask).sum(['lat', 'lon'])
-    pet = pet.sum(['label']).compute()
+    pet = da_pet.reindex_like(da_pet_mask, method='nearest', tolerance=0.000001) * da_pet_mask
+    pet = pet.sum(['lat', 'lon']).compute()
     date_range = pd.date_range(start=from_time+timedelta(minutes=15), end=to_time, freq='30min')
     pet_over_time = pd.Series(index=date_range)
     for month in range(1, 13):
