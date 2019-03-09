@@ -8,6 +8,20 @@ import pyproj
 import gcsfs
 from datetime import datetime, timedelta
 from tqdm import tqdm
+import os
+
+def gcs_get_dir(src, dst, fs):
+    os.mkdir(dst)
+    if not src.endswith('/'):
+        src += '/'
+    ls = fs.ls(src)
+    for rname in ls:
+        if rname.endswith('/'):
+            lname = os.path.basename(rname[:-1])
+            gcs_get_dir(rname, f'{dst}/{lname}', fs)
+        else:
+            lname = os.path.basename(rname)
+            fs.get(rname, f'{dst}/{lname}')
 
 def adjust_bbox(da, dims):
     """Adjust the bounding box of a DaskArray to a coarser resolution.
@@ -38,6 +52,7 @@ def adjust_bbox(da, dims):
         coord = np.hstack((coord0, coord1, coord2))
         coords[k] = coord
     #return da.reindex(**coords).fillna(0)
+    # the following code breaks the generality of the preceding code
     a = np.zeros((coords['lat'].shape[0], coords['lon'].shape[0]), dtype=np.uint8)
     pix_deg = 1 / 1200
     dlat = int(round((coords['lat'][0] - da.lat.values[0]) / pix_deg))
@@ -149,7 +164,7 @@ def subtract_label(lbls, from_lbls):
     return [l for l in from_lbls if l not in lbls]
 
 def get_path(path, gcs=None):
-    if path.startswith('gs:'):
+    if path.startswith('gs://'):
         return gcsfs.GCSMap(path[3:], gcs)
     else:
         return path
@@ -158,13 +173,9 @@ def get_mask(mask_path, labels, gcs=None):
     pix_deg_flow = 1 / 1200
     das = []
     lat0, lat1, lon0, lon1 = -np.inf, np.inf, np.inf, -np.inf
-    ds = xr.open_zarr(get_path(mask_path, gcs))
     for label in tqdm(labels):
-        da = ds[label]
-        ul, ld = da.attrs['bbox']
-        lt0, ln0 = ul
-        lt1, ln1 = ld
-        da = da.sel(lat=slice(lt0, lt1), lon=slice(ln0, ln1)).compute()
+        ds = xr.open_zarr(get_path(f'{mask_path}/{label}', gcs), auto_chunk=False)
+        da = ds['mask'].compute()
         das.append(da)
         lat0 = max(lat0, da.lat.values[0])
         lat1 = min(lat1, da.lat.values[-1])
@@ -179,17 +190,18 @@ def get_mask(mask_path, labels, gcs=None):
     for da in das:
         dlat = int(round((lat0 - da.lat.values[0]) / pix_deg_flow))
         dlon = int(round((da.lon.values[0] - lon0) / pix_deg_flow))
-        a[dlat:dlat+da.shape[0], dlon:dlon+da.shape[1]] = da.values
+        a[dlat:dlat+da.shape[0], dlon:dlon+da.shape[1]] += da.values
     da = xr.DataArray(a, coords=[lat, lon], dims=['lat', 'lon'])
     return da
 
-def get_coarser_mask(mask_path, labels, pix_deg, gcs=None):
+def get_coarser_mask(mask, pix_deg, gcs=None):
+    if type(mask) is str:
+        ds = xr.open_zarr(get_path(mask, gcs), auto_chunk=False)
+    else:
+        ds = mask
     pix_deg_flow = 1 / 1200
     ratio = int(round(pix_deg / pix_deg_flow))
-    #da = get_mask(mask_path, labels, gcs)
-    ds = xr.open_zarr(get_path(mask_path, gcs))
-    da = ds['mask'].sel(label=labels).sum(['label'])
-    da1 = da.compute()
+    da1 = ds['mask'].compute()
     da2 = adjust_bbox(da1, {'lat': (pix_deg, -pix_deg_flow), 'lon': (pix_deg, pix_deg_flow)})
     da3 = aggregate_da(da2, {'lat': ratio, 'lon': ratio}) / (ratio * ratio)
     da3 = da3.rename({'lat_agg': 'lat', 'lon_agg': 'lon'})
@@ -197,19 +209,20 @@ def get_coarser_mask(mask_path, labels, pix_deg, gcs=None):
     da3.lat.values = np.round(da3.lat.values / pix_deg, 1) * pix_deg
     return da3
 
-def get_trmm_mask(mask_path, labels, gcs=None):
-    return get_coarser_mask(mask_path, labels, 0.25, gcs)
+def get_trmm_mask(mask, gcs=None):
+    return get_coarser_mask(mask, 0.25, gcs)
 
-def get_gpm_mask(mask_path, labels, gcs):
-    return get_coarser_mask(mask_path, labels, 0.1, gcs)
+def get_gpm_mask(mask, gcs):
+    return get_coarser_mask(mask, 0.1, gcs)
 
-def get_pet_mask(mask_path, labels, gcs):
-    return get_coarser_mask(mask_path, labels, 1/120, gcs)
+def get_pet_mask(mask, gcs):
+    return get_coarser_mask(mask, 1/120, gcs)
 
 def get_watershed_p(ds_p, da_mask, da_area, tolerance):
     da_mask = da_area.reindex_like(da_mask, method='nearest', tolerance=tolerance) * da_mask
     da_mask = da_mask / da_mask.sum(['lat', 'lon'])
-    p = (ds_p.reindex_like(da_mask, method='nearest', tolerance=tolerance) * da_mask).sum(['lat', 'lon'])
+    # clip(0) because GPM has negative values!
+    p = (ds_p.reindex_like(da_mask, method='nearest', tolerance=tolerance).clip(0) * da_mask).sum(['lat', 'lon'])
     return p
 
 def get_ws_p(pix_deg, da_mask, da_p, tolerance=None):
@@ -250,7 +263,7 @@ def str2datetime(s):
     else:
         return s
 
-def get_precipitation(from_time, to_time, mask_path, labels, ds_trmm=None, ds_gpm=None, gcs=None):
+def get_precipitation(from_time, to_time, mask, ds_trmm=None, ds_gpm=None, gcs=None):
     from_time = str2datetime(from_time)
     to_time = str2datetime(to_time)
     trmm_start_time = datetime(2000, 3, 1, 12)
@@ -266,7 +279,7 @@ def get_precipitation(from_time, to_time, mask_path, labels, ds_trmm=None, ds_gp
         else:
             to_time_trmm = to_time
         print('Getting TRMM precipitation from ' + str(from_time) + ' to ' + str(to_time_trmm))
-        da_trmm_mask = get_trmm_mask(mask_path, labels, gcs)
+        da_trmm_mask = get_trmm_mask(mask, gcs)
         p_trmm = get_trmm_precipitation(from_time, to_time_trmm, da_trmm_mask, ds_trmm, gcs)
         # TRMM is 3-hourly, resample to 30min and interpolate with -15min to be like GPM
         p_trmm = p_trmm.resample('30min').asfreq()
@@ -278,7 +291,7 @@ def get_precipitation(from_time, to_time, mask_path, labels, ds_trmm=None, ds_gp
     if to_time > gpm_start_time:
         # take GPM
         print('Getting GPM precipitation from ' + str(from_time_gpm) + ' to ' + str(to_time))
-        da_gpm_mask = get_gpm_mask(mask_path, labels, gcs)
+        da_gpm_mask = get_gpm_mask(mask, gcs)
         p_gpm = get_gpm_precipitation(from_time, to_time, da_gpm_mask, ds_gpm, gcs)
     if (p_trmm is not None) and (p_gpm is not None):
         print('Concatenating TRMM and GPM precipitations')
@@ -289,10 +302,10 @@ def get_precipitation(from_time, to_time, mask_path, labels, ds_trmm=None, ds_gp
         precipitation = p_gpm
     return precipitation
 
-def get_pet(from_time, to_time, mask_path, labels, ds_pet=None, gcs=None):
+def get_pet(from_time, to_time, mask, ds_pet=None, gcs=None):
     from_time = str2datetime(from_time)
     to_time = str2datetime(to_time)
-    da_pet_mask = get_pet_mask(mask_path, labels, gcs)
+    da_pet_mask = get_pet_mask(mask, gcs)
     if ds_pet is None:
         ds_pet = xr.open_zarr(gcsfs.GCSMap('pangeo-data/cgiar_pet', gcs))
     da_pet = ds_pet['PET']

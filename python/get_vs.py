@@ -5,6 +5,7 @@ from pandas import DataFrame
 import numpy as np
 from tqdm import tqdm
 import xarray as xr
+from datetime import timedelta
 
 def get_vs(url):
     response = requests.get(url)
@@ -57,3 +58,13 @@ def locate_vs(vs_file, pix_nb=20, acc_min=1_000_000):
         new_lat_l.append(max_lat)
         new_lon_l.append(max_lon)
     return DataFrame({'station':station_l, 'lat':lat_l, 'lon':lon_l, 'new_lat':new_lat_l, 'new_lon':new_lon_l})
+
+def get_waterlevel(from_time, to_time, vs):
+    url = f'http://hydroweb.theia-land.fr/hydroweb/view/{vs}?lang=en&basin=AMAZONAS'
+    df, _, _ = get_vs(url)
+    # don't bother about 15min offset, nor about multiple values for a date
+    he = df.loc[from_time:to_time]
+    he.index = he.index.round('30min')
+    he = he.resample('30min').asfreq()
+    he.index = he.index + timedelta(minutes=15)
+    return he

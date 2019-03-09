@@ -16,9 +16,14 @@ import matplotlib.pyplot as plt
 from base64 import b64encode
 from io import StringIO, BytesIO
 from ipyleaflet import Map, Popup, ImageOverlay, Polygon, Marker
+from traitlets import Int
 from ipywidgets import ToggleButtons
 from IPython.display import display
 from delineate import delineate
+
+class CustomPopup(Popup):
+    max_width = Int(160).tag(sync=True, o=True)
+    min_width = Int(160).tag(sync=True, o=True)
 
 def to_webmercator(source, affine, bounds):
     with rasterio.Env():
@@ -118,7 +123,7 @@ class Flow(object):
             else:
                 self.s = ToggleButtons(options=[showHideFlow, 'Set marker', 'Close'], value=None)
             self.s.observe(self.get_choice, names='value')
-            self.p = Popup(location=self.coord, child=self.s, max_width=160, close_button=False, auto_close=True, close_on_escape_key=False)
+            self.p = CustomPopup(location=self.coord, child=self.s, max_width=160, close_button=False, auto_close=True, close_on_escape_key=False)
             self.m.add_layer(self.p)
     def get_choice(self, x):
         self.show_menu = False
