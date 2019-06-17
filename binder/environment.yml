@@ -25,6 +25,7 @@ dependencies:
   - nbserverproxy
   - jupyter
   - jupyterlab=0.35
+  - tornado=5.1.1
   - lxml
   - zarr
   - intake
@@ -35,5 +36,6 @@ dependencies:
   - scikit-image
   - shapely
   - pip:
+    - dask_labextension==0.3.3
     - soupsieve
     - gcsfs

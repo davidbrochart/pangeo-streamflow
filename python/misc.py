@@ -164,8 +164,9 @@ def subtract_label(lbls, from_lbls):
     return [l for l in from_lbls if l not in lbls]
 
 def get_path(path, gcs=None):
-    if path.startswith('gs://'):
-        return gcsfs.GCSMap(path[3:], gcs)
+    prefix = 'gs://'
+    if path.startswith(prefix):
+        return gcsfs.GCSMap(path[len(prefix):], gcs)
     else:
         return path
 

@@ -2,7 +2,6 @@ import pickle
 import os
 from tqdm import tqdm
 import xarray as xr
-from pydap.cas.urs import setup_session
 import rasterio
 import rasterio.features
 import pyproj
@@ -66,26 +65,29 @@ def get_img(a_web):
     imgurl = 'data:image/png;base64,' + data
     return imgurl
 
-def show_acc(label, coord, m, current_io, width, da):
+def overlay(label, coord, m, current_io, width, da, func=None):
     width2 = width / 2.
     lat, lon = coord
-    acc = da.loc[1, lat+width2:lat-width2, lon-width2:lon+width2]
-    acc_v = int(acc.sel(y=lat, x=lon, method='nearest').values)
+    tile = da.loc[1, lat+width2:lat-width2, lon-width2:lon+width2]
+    value = int(tile.sel(y=lat, x=lon, method='nearest').values)
 
-    imgurl = get_img(np.sqrt(acc.values))
+    if func is None:
+        imgurl = get_img(tile.values)
+    else:
+        imgurl = get_img(func(tile.values))
     bounds = [
-        (acc.y[-1].values - 0.5 / 1200,
-        acc.x[0].values - 0.5 / 1200),
-        (acc.y[0].values + 0.5 / 1200,
-        acc.x[-1].values + 0.5 / 1200)
+        (tile.y[-1].values - 0.5 / 1200,
+        tile.x[0].values - 0.5 / 1200),
+        (tile.y[0].values + 0.5 / 1200,
+        tile.x[-1].values + 0.5 / 1200)
         ]
     io = ImageOverlay(url=imgurl, bounds=bounds, opacity=0.5)
     if current_io is not None:
         m.remove_layer(current_io)
     m.add_layer(io)
-    return io, acc_v
+    return io, value
 
-class Flow(object):
+class Control(object):
     def __init__(self, m, label):
         self.m = m
         self.label = label
@@ -94,36 +96,44 @@ class Flow(object):
         self.io = None
         self.s = None
         self.p = None
-        self.show_flow = False
+        self.show_data = ''
         self.show_menu = False
-        self.da = xr.open_rasterio('../data/hydrosheds/acc.vrt')
+        self.da_acc = xr.open_rasterio('../data/hydrosheds/acc.vrt')
+        self.da_dem = xr.open_rasterio('../data/hydrosheds/dem.vrt')
         self.marker = None
     def show(self, **kwargs):
         if not self.show_menu:
             if kwargs.get('type') == 'mousemove':
                 self.coord = kwargs.get('coordinates')
-                if self.show_flow:
-                    self.io, flow = show_acc(self.label, self.coord, self.m, self.io, self.width, self.da)
+                if self.show_data == 'flow':
+                    self.io, flow = overlay(self.label, self.coord, self.m, self.io, self.width, self.da_acc, np.sqrt)
                     self.label.value = f'lat/lon = {self.coord}, flow = {flow}'
+                elif self.show_data == 'elevation':
+                    self.io, elevation = overlay(self.label, self.coord, self.m, self.io, self.width, self.da_dem)
+                    self.label.value = f'lat/lon = {self.coord}, elevation = {elevation}'
                 else:
                     self.label.value = f'lat/lon = {self.coord}'
-                    pass
             elif 'width' in kwargs:
                 self.width = kwargs.get('width')
-                if self.coord and self.show_flow:
-                    self.io, flow = show_acc(self.label, self.coord, self.m, self.io, self.width, self.da)
+                if self.coord and self.show_data == 'flow':
+                    self.io, flow = overlay(self.label, self.coord, self.m, self.io, self.width, self.da_acc, np.sqrt)
+                elif self.coord and self.show_data == 'elevation':
+                    self.io, elevation = overlay(self.label, self.coord, self.m, self.io, self.width, self.da_dem)
         if kwargs.get('type') == 'contextmenu':
             self.show_menu = True
-            if self.show_flow:
+            if self.show_data == 'flow':
                 showHideFlow = 'Hide flow'
             else:
                 showHideFlow = 'Show flow'
-            if showHideFlow == 'Hide flow':
-                self.s = ToggleButtons(options=[showHideFlow, 'Delineate watershed', 'Set marker', 'Close'], value=None)
+            if self.show_data == 'flow':
+                self.s = ToggleButtons(options=['Hide flow', 'Delineate watershed', 'Set marker', 'Close'], value=None)
+            elif self.show_data == 'elevation':
+                self.s = ToggleButtons(options=['Hide elevation', 'Set marker', 'Close'], value=None)
             else:
-                self.s = ToggleButtons(options=[showHideFlow, 'Set marker', 'Close'], value=None)
+                self.s = ToggleButtons(options=['Show flow', 'Show elevation', 'Set marker', 'Close'], value=None)
             self.s.observe(self.get_choice, names='value')
-            self.p = CustomPopup(location=self.coord, child=self.s, max_width=160, close_button=False, auto_close=True, close_on_escape_key=False)
+            self.p = Popup(location=self.coord, child=self.s, max_width=160, close_button=False, auto_close=True, close_on_escape_key=False)
+            #self.p = CustomPopup(location=self.coord, child=self.s, max_width=160, close_button=False, auto_close=True, close_on_escape_key=False)
             self.m.add_layer(self.p)
     def get_choice(self, x):
         self.show_menu = False
@@ -132,13 +142,15 @@ class Flow(object):
         self.p = None
         choice = x['new']
         if choice == 'Show flow':
-            self.show_flow = True
-        elif choice == 'Hide flow':
-            self.show_flow = False
+            self.show_data = 'flow'
+        elif choice == 'Show elevation':
+            self.show_data = 'elevation'
+        elif choice == 'Hide flow' or choice == 'Hide elevation':
+            self.show_data = ''
             self.m.remove_layer(self.io)
             self.io = None
         elif choice == 'Delineate watershed':
-            self.show_flow = False
+            self.show_data = ''
             self.m.remove_layer(self.io)
             self.io = None
             self.label.value = 'Delineating watershed, please wait...'

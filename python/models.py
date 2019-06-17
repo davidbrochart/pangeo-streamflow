@@ -115,7 +115,7 @@ class gr4hh:
     def set_x(self, x):
         x1, x2, x3, x4 = x[:4]
         self.x = np.zeros(5)
-        self.x[:len(x)] = x[:len(x)]
+        self.x[:len(x)] = x
         if x[0] <= 0 or x[2] <= 0 or x[3] <= 0:
             return self
         self.s = np.empty(2 + int(2. * x4))
