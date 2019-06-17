@@ -18,7 +18,6 @@ dependencies:
   - xarray
   - pyproj
   - branca
-  - pydap
   - dask
   - distributed
   - bokeh
