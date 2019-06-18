@@ -43,9 +43,10 @@ def to_webmercator(source, affine, bounds):
             resampling=Resampling.nearest)
     return destination, dst_transform, dst_shape
 
-def get_img(a_web):
+def get_img(a_web, nan=None):
+    if nan is not None:
+        a_web = np.where(a_web==nan, np.nan, a_web)
     if (np.all(np.isnan(a_web))):
-        a_web[:, :] = 0
         a_norm = a_web
     else:
         a_norm = a_web - np.nanmin(a_web)
@@ -65,16 +66,16 @@ def get_img(a_web):
     imgurl = 'data:image/png;base64,' + data
     return imgurl
 
-def overlay(label, coord, m, current_io, width, da, func=None):
+def overlay(label, coord, m, current_io, width, da, func=None, nan=None):
     width2 = width / 2.
     lat, lon = coord
     tile = da.loc[1, lat+width2:lat-width2, lon-width2:lon+width2]
     value = int(tile.sel(y=lat, x=lon, method='nearest').values)
 
-    if func is None:
-        imgurl = get_img(tile.values)
-    else:
-        imgurl = get_img(func(tile.values))
+    values = tile.values
+    if func is not None:
+        values = func(values)
+    imgurl = get_img(values, nan)
     bounds = [
         (tile.y[-1].values - 0.5 / 1200,
         tile.x[0].values - 0.5 / 1200),
@@ -106,19 +107,19 @@ class Control(object):
             if kwargs.get('type') == 'mousemove':
                 self.coord = kwargs.get('coordinates')
                 if self.show_data == 'flow':
-                    self.io, flow = overlay(self.label, self.coord, self.m, self.io, self.width, self.da_acc, np.sqrt)
+                    self.io, flow = overlay(self.label, self.coord, self.m, self.io, self.width, self.da_acc, func=np.sqrt, nan=0)
                     self.label.value = f'lat/lon = {self.coord}, flow = {flow}'
                 elif self.show_data == 'elevation':
-                    self.io, elevation = overlay(self.label, self.coord, self.m, self.io, self.width, self.da_dem)
+                    self.io, elevation = overlay(self.label, self.coord, self.m, self.io, self.width, self.da_dem, nan=-32768)
                     self.label.value = f'lat/lon = {self.coord}, elevation = {elevation}'
                 else:
                     self.label.value = f'lat/lon = {self.coord}'
             elif 'width' in kwargs:
                 self.width = kwargs.get('width')
                 if self.coord and self.show_data == 'flow':
-                    self.io, flow = overlay(self.label, self.coord, self.m, self.io, self.width, self.da_acc, np.sqrt)
+                    self.io, flow = overlay(self.label, self.coord, self.m, self.io, self.width, self.da_acc, func=np.sqrt, nan=0)
                 elif self.coord and self.show_data == 'elevation':
-                    self.io, elevation = overlay(self.label, self.coord, self.m, self.io, self.width, self.da_dem)
+                    self.io, elevation = overlay(self.label, self.coord, self.m, self.io, self.width, self.da_dem, nan=-32768)
         if kwargs.get('type') == 'contextmenu':
             self.show_menu = True
             if self.show_data == 'flow':
