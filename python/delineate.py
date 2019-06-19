@@ -25,7 +25,6 @@ def delineate(lat, lon, sub_latlon=[], sub_nb=None, acc_delta=np.inf, progress=F
     samples = np.empty((1024, 2), dtype=np.float64)
     lengths = np.empty(1024, dtype=np.float64)
     areas = np.empty(1024, dtype=np.float64)
-    areas = np.empty(1024, dtype=np.float64)
     labels = np.empty((1024, 3), dtype=np.int32)
     dirNeighbors = np.empty(1024, dtype=np.uint8)
     accNeighbors = np.empty(1024, dtype=np.float64)

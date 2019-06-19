@@ -19,6 +19,7 @@ from traitlets import Int
 from ipywidgets import ToggleButtons
 from IPython.display import display
 from delineate import delineate
+from flood import flood_delineate
 
 class CustomPopup(Popup):
     max_width = Int(160).tag(sync=True, o=True)
@@ -93,6 +94,7 @@ class Control(object):
         self.m = m
         self.label = label
         self.width = 0.1
+        self.elevation = 0
         self.coord = None
         self.io = None
         self.s = None
@@ -120,6 +122,8 @@ class Control(object):
                     self.io, flow = overlay(self.label, self.coord, self.m, self.io, self.width, self.da_acc, func=np.sqrt, nan=0)
                 elif self.coord and self.show_data == 'elevation':
                     self.io, elevation = overlay(self.label, self.coord, self.m, self.io, self.width, self.da_dem, nan=-32768)
+            elif 'elevation' in kwargs:
+                self.elevation = kwargs.get('elevation')
         if kwargs.get('type') == 'contextmenu':
             self.show_menu = True
             if self.show_data == 'flow':
@@ -129,7 +133,7 @@ class Control(object):
             if self.show_data == 'flow':
                 self.s = ToggleButtons(options=['Hide flow', 'Delineate watershed', 'Set marker', 'Close'], value=None)
             elif self.show_data == 'elevation':
-                self.s = ToggleButtons(options=['Hide elevation', 'Set marker', 'Close'], value=None)
+                self.s = ToggleButtons(options=['Hide elevation', 'Delineate flood', 'Set marker', 'Close'], value=None)
             else:
                 self.s = ToggleButtons(options=['Show flow', 'Show elevation', 'Set marker', 'Close'], value=None)
             self.s.observe(self.get_choice, names='value')
@@ -162,6 +166,17 @@ class Control(object):
             polygon = get_polygon(mask, ds_mask.lat.values[0]+0.5/1200, ds_mask.lon.values[0]-0.5/1200)
             self.m.add_layer(polygon)
             self.label.value = 'Watershed displayed'
+        elif choice == 'Delineate flood':
+            self.show_data = ''
+            self.m.remove_layer(self.io)
+            self.io = None
+            self.label.value = 'Delineating flood, please wait...'
+            da_mask = flood_delineate(*self.coord, self.elevation)
+            self.label.value = 'Flood delineated'
+            mask = da_mask.values
+            polygon = get_polygon(mask, da_mask.lat.values[0]+0.5/1200, da_mask.lon.values[0]-0.5/1200)
+            self.m.add_layer(polygon)
+            self.label.value = 'Flood displayed'
         elif choice == 'Set marker':
             if self.marker is not None:
                 self.m.remove_layer(self.marker)
