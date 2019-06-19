@@ -49,7 +49,7 @@ def cflood_delineate(double lat, double lon, double pix_deg, double tile_deg, do
             elif i == 7:
                 dx, dy = 1, -1
             if (((mm[my+dy, int(np.floor((mx+dx) / 8))] >> ((mx+dx) % 8)) & 1) == 0) and (-32768 < dem_tile[y+dy, x+dx] < elevation):
-                # pixel not already processed, and water can flow into it
+                # pixel not already flooded, and water can flow into it
                 next_xy[next_size] = [mx+dx, my+dy]
                 next_size += 1
                 if next_size == next_xy.shape[0]:

@@ -133,7 +133,7 @@ class Control(object):
             if self.show_data == 'flow':
                 self.s = ToggleButtons(options=['Hide flow', 'Delineate watershed', 'Set marker', 'Close'], value=None)
             elif self.show_data == 'elevation':
-                self.s = ToggleButtons(options=['Hide elevation', 'Delineate flood', 'Set marker', 'Close'], value=None)
+                self.s = ToggleButtons(options=['Hide elevation', 'Delineate floodplain', 'Set marker', 'Close'], value=None)
             else:
                 self.s = ToggleButtons(options=['Show flow', 'Show elevation', 'Set marker', 'Close'], value=None)
             self.s.observe(self.get_choice, names='value')
@@ -166,17 +166,17 @@ class Control(object):
             polygon = get_polygon(mask, ds_mask.lat.values[0]+0.5/1200, ds_mask.lon.values[0]-0.5/1200)
             self.m.add_layer(polygon)
             self.label.value = 'Watershed displayed'
-        elif choice == 'Delineate flood':
+        elif choice == 'Delineate floodplain':
             self.show_data = ''
             self.m.remove_layer(self.io)
             self.io = None
-            self.label.value = 'Delineating flood, please wait...'
+            self.label.value = 'Delineating floodplain, please wait...'
             da_mask = flood_delineate(*self.coord, self.elevation)
-            self.label.value = 'Flood delineated'
+            self.label.value = 'Floodplain delineated'
             mask = da_mask.values
             polygon = get_polygon(mask, da_mask.lat.values[0]+0.5/1200, da_mask.lon.values[0]-0.5/1200)
             self.m.add_layer(polygon)
-            self.label.value = 'Flood displayed'
+            self.label.value = 'Floodplain displayed'
         elif choice == 'Set marker':
             if self.marker is not None:
                 self.m.remove_layer(self.marker)
