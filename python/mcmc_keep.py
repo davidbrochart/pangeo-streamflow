@@ -1,4 +1,5 @@
 import numpy as np
+import random
 from pandas import DataFrame
 try:
     from tqdm import tqdm
@@ -95,42 +96,49 @@ class Sampler:
         else:
             return self.q
 
-def get_lnprob(gr4, warmup, peq, lnprob_prior, area_head, area_tail, q_kde=None):
-    def lnprob(x):
-        lnp = 0
-        for i, v in enumerate(x):
-            lnp += lnprob_prior[i](v)
-        if not np.isfinite(lnp):
-            return -np.inf, np.ones_like(peq.p.values) * np.inf
+#def get_logp(out_label, gr4, warmup, peq, lnprob_prior, area_up, area_down, q_kde=None):
+#    def logp(xs):
+#        '''
+#        Parameters:
+#            - xs: dict of the form label:parameter_list
+#        '''
+#        lnp = 0
+#        for x in xs.values():
+#            for i, v in enumerate(x):
+#                lnp += lnprob_prior[i](v)
+#            if not np.isfinite(lnp):
+#                return -np.inf, np.full_like(peq.p.values, np.inf)
+#
+#        q_sim = 0
+#        for label, x in {k:v for k, v in xs.items() if k != out_label}.items():
+#            # upstream basins
+#            # x includes the delay in the GR model
+#            q_sim += gr4(x).run([peq[f'p{label}'].values, peq[f'e{label}'].values]) * area_up[label]
+#        # downstream basin
+#        q_sim += gr4(xs[out_label]).run([peq[f'p{out_label}'].values, peq[f'e{out_label}'].values]) * area_down
+#        q_sim /= sum(area_up.values()) + area_down
+#        if q_kde is None:
+#            # observation is measured water level
+#            h_obs = peq.h_obs.values
+#            h_err = peq.h_err.values
+#            h_sim = np.hstack((np.full(warmup, np.nan), dist_map(q_sim[warmup:], h_obs[warmup:])))
+#            df = DataFrame({'h_sim': h_sim, 'h_obs': h_obs, 'h_err': h_err})[warmup:].dropna()
+#            std2 = df.h_err * df.h_err
+#            # must not have zero error on observation
+#            min_std2 = np.max(std2) / 100
+#            std2 = np.clip(std2, min_std2, None)
+#            return lnp + np.sum(-np.square(df.h_sim.values - df.h_obs.values) / (2 * std2) - np.log(np.sqrt(2 * np.pi * std2))), q_sim
+#        else:
+#            # observation is simulated streamflow
+#            lnp_q = 0
+#            for i in range(warmup, q_sim.size, sim_step):
+#                lnp_q += lnprob_from_density(q_kde[:, :, i])(q_sim[i])
+#            return lnp + lnp_q, q_sim
+#    return lnprob
 
-        x_head = x[:5] # this includes the delay in the gr4 model
-        g_head = gr4(x_head)
-        if area_tail > 0:
-            x_tail = x[5:]
-            g_tail = gr4(x_tail)
-            q_tail = g_tail.run([peq.p.values, peq.e.values])
-        else:
-            q_tail = 0
-        q_sim = (g_head.run([peq.p.values, peq.e.values]) * area_head + q_tail * area_tail) / (area_head + area_tail)
-        if q_kde is None:
-            # observation is measured water level
-            h_obs = peq.h_obs.values
-            h_err = peq.h_err.values
-            h_sim = np.hstack((np.full(warmup, np.nan), dist_map(q_sim[warmup:], h_obs[warmup:])))
-            df = DataFrame({'h_sim': h_sim, 'h_obs': h_obs, 'h_err': h_err})[warmup:].dropna()
-            std2 = df.h_err * df.h_err
-            return lnp + np.sum(-np.square(df.h_sim.values - df.h_obs.values) / (2 * std2) - np.log(np.sqrt(2 * np.pi * std2))), q_sim
-        else:
-            # observation is simulated streamflow
-            lnp_q = 0
-            for i in range(warmup, q_sim.size, sim_step):
-                lnp_q += lnprob_from_density(q_kde[:, :, i])(q_sim[i])
-            return lnp + lnp_q, q_sim
-    return lnprob
-
-def uniform_density(a, b):
-    xy = np.empty((2, 100))
-    xy[0] = np.linspace(a, b, 100)
+def uniform_density(a, b, nb=100):
+    xy = np.empty((2, nb))
+    xy[0] = np.linspace(a, b, nb)
     xy[1, :] = 1
     xy[1] /= np.trapz(xy[1], x=xy[0])
     return xy
@@ -161,3 +169,44 @@ def dist_map(x, y):
     x_sorted = np.sort(df.x.values)
     y_sorted = np.sort(df.y.values)
     return np.interp(x, x_sorted, y_sorted)
+
+def get_kde(samples, a=np.inf, b=-np.inf, nb=100):
+    '''Computes the Kernel Densit Estimate.
+
+    Parameters:
+        - samples: array of samples
+
+    Returns:
+        - xyz: a list consisting of sample values, probability density of the sample values, and samples.
+    '''
+    samples = samples[np.isfinite(samples)]
+    smin, smax = np.min(samples), np.max(samples)
+    if smin == smax:
+        smin *= 0.99
+        smax *= 1.01
+        samples[:2] = [smin, smax]
+    if a < smin:
+        smin = a
+    if b > smax:
+        smax = b
+    xyz = []
+    xyz.append(np.linspace(smin, smax, nb))
+    xyz.append(stats.gaussian_kde(samples)(xyz[0]))
+    xyz[1] /= np.trapz(xyz[1], x=xyz[0])
+    xyz.append(samples)
+    return xyz
+
+def sample(population, n=1):
+    '''Samples from a population.
+
+    Parameters:
+        - population: the population from which to sample from.
+
+    Returns:
+        - samples: sample(s) from the population.
+    '''
+    samples = [population[random.randint(0, len(population)-1)] for _ in range(n)]
+    if n == 1:
+        return samples[0]
+    else:
+        return samples

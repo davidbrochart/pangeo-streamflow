@@ -310,7 +310,6 @@ def get_pet(from_time, to_time, mask, ds_pet=None, gcs=None):
     if ds_pet is None:
         ds_pet = xr.open_zarr(gcsfs.GCSMap('pangeo-data/cgiar_pet', gcs))
     da_pet = ds_pet['PET']
-    pix_deg_pet = 1 / 120
     pet = get_ws_p(1/120, da_pet_mask, da_pet, tolerance=0.000001)
     date_range = pd.date_range(start=from_time+timedelta(minutes=15), end=to_time, freq='30min')
     pet_over_time = pd.Series(index=date_range)
