@@ -38,4 +38,4 @@ dependencies:
     - dask_labextension==0.3.3
     - soupsieve
     - gcsfs
-    - git+https://github.com/davidbrochart/mcmc.git#egg=mcmc
+    - "--editable=git+https://github.com/davidbrochart/mcmc.git#egg=mcmc"
