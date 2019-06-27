@@ -9,6 +9,7 @@ import gcsfs
 from datetime import datetime, timedelta
 from tqdm import tqdm
 import os
+import pickle
 
 def gcs_get_dir(src, dst, fs):
     os.mkdir(dst)
@@ -230,7 +231,15 @@ def get_ws_p(pix_deg, da_mask, da_p, tolerance=None):
     if tolerance is None:
         s = str(pix_deg)
         tolerance = 10 ** (-(len(s) - s.find('.')))
-    da_area = pixel_area(pix_deg)
+    fname = f'../data/pixel_area/pix_deg_{pix_deg}.pkl'
+    if os.path.exists(fname):
+        with open(fname, 'rb') as f:
+            da_area = pickle.load(f)
+    else:
+        da_area = pixel_area(pix_deg)
+        os.makedirs(os.path.dirname(fname), exist_ok=True)
+        with open(fname, 'wb') as f:
+            pickle.dump(da_area, f, protocol=-1)
     da_mask = da_area.reindex_like(da_mask, method='nearest', tolerance=tolerance) * da_mask
     da_mask = da_mask / da_mask.sum(['lat', 'lon'])
     p = (da_p.reindex_like(da_mask, method='nearest', tolerance=tolerance) * da_mask).sum(['lat', 'lon']).persist()
