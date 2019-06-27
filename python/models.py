@@ -1,7 +1,6 @@
 import math
 import numpy as np
 from numba import jit
-from pandas import Series, DataFrame
 
 @jit(nopython=True)
 def run_gr4hh(x, p, e, q, s, uh1, uh2, l, m):
@@ -10,8 +9,6 @@ def run_gr4hh(x, p, e, q, s, uh1, uh2, l, m):
         d = x[4]
     else:
         d = 0
-    if x1 <= 0 or x3 <= 0 or x4 <= 0:
-        q[:] = np.inf
     d0 = int(d)
     d1 = d0 + 1
     w1 = d - float(d0)
@@ -110,7 +107,7 @@ class gr4hh:
     def __init__(self, x=None):
         self.p = None
         self.e = None
-        if not x is None:
+        if x is not None:
             self.set_x(x)
     def set_x(self, x):
         x1, x2, x3, x4 = x[:4]
@@ -131,20 +128,19 @@ class gr4hh:
                 self.uh1_array[i] = self.uh1(i + 1)
             self.uh2_array[i] = self.uh2(i + 1)
         return self
-    def run(self, pe=None, x=None):
-        if pe is None:
-            pe = [self.p, self.e]
+    def run(self, peq=None, x=None):
+        if peq is None:
+            peq = self.peq
         if x is not None:
             self.set_x(x)
-        q = np.zeros_like(pe[0])
+        peq['q'] = np.zeros_like(peq.p.values)
         if self.x[0] <= 0 or self.x[2] <= 0 or self.x[3] <= 0:
-            q[:] = np.inf
-            return q
-        run_gr4hh(self.x, pe[0], pe[1], q, self.s, self.uh1_array, self.uh2_array, self.l, self.m)
-        return q
-    def set_pe(self, pe):
-        self.p = pe[0]
-        self.e = pe[1]
+            peq.q[:] = np.inf
+            return peq.q
+        run_gr4hh(self.x, peq.p.values, peq.e.values, peq.q.values, self.s, self.uh1_array, self.uh2_array, self.l, self.m)
+        return peq.q
+    def set_peq(self, peq):
+        self.peq = peq
         return self
 
 @jit(nopython=True)

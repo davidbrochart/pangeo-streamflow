@@ -316,3 +316,15 @@ def get_pet(from_time, to_time, mask, ds_pet=None, gcs=None):
     for month in range(1, 13):
         pet_over_time.loc[date_range.month==month] = pet.loc[month] / 30 / 24
     return pet_over_time
+
+def get_peq_from_df(df, suffix):
+    '''Get p, e and q time series from a DataFrame where these might be present with a suffix.
+    Returns a DataFrame with p, e and q if they are found.
+    '''
+    df_peq = DataFrame()
+    df_peq.index = df.index
+    for prefix in ['p', 'e', 'q']:
+        name = prefix + suffix
+        if name in df.columns:
+            df_peq[prefix] = df[name]
+    return df_peq
