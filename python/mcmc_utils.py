@@ -34,7 +34,7 @@ def get_likelihood_logp(gr4, warmup, pe, area, he=None, q_pdf=None, sim_step=1):
             h_err = he.e.values
             h_sim = np.hstack((np.full(warmup, np.nan), dist_map(q_sim.values[warmup:], h_obs[warmup:])))
             df = DataFrame({'h_sim': h_sim, 'h_obs': h_obs, 'h_err': h_err}).dropna()
-            std2 = df.h_err.values * df.h_err.values
+            std2 = (df.h_err.values * df.h_err.values) * 10 # this factore to take into account model/data uncertainty
             # must not have zero error on observation
             min_std2 = np.max(std2) / 100
             std2 = np.clip(std2, min_std2, None)

@@ -9,7 +9,10 @@ import gcsfs
 from datetime import datetime, timedelta
 from tqdm import tqdm
 import os
+import shutil
 import pickle
+import dask
+import dask.dataframe as dd
 
 def gcs_get_dir(src, dst, fs):
     os.mkdir(dst)
@@ -52,15 +55,15 @@ def adjust_bbox(da, dims):
         coord2 = np.arange(da[k].values[-1]+step, dim1, step)
         coord = np.hstack((coord0, coord1, coord2))
         coords[k] = coord
-    #return da.reindex(**coords).fillna(0)
-    # the following code breaks the generality of the preceding code
-    a = np.zeros((coords['lat'].shape[0], coords['lon'].shape[0]), dtype=np.uint8)
-    pix_deg = 1 / 1200
-    dlat = int(round((coords['lat'][0] - da.lat.values[0]) / pix_deg))
-    dlon = int(round((da.lon.values[0] - coords['lon'][0]) / pix_deg))
-    a[dlat:dlat+da.shape[0], dlon:dlon+da.shape[1]] = da.values
-    da_reindex = xr.DataArray(a, coords=[coords['lat'], coords['lon']], dims=['lat', 'lon'])
-    return da_reindex
+    return da.reindex(**coords).fillna(0)
+    ## the following code breaks the generality of the preceding code
+    #a = np.zeros((coords['lat'].shape[0], coords['lon'].shape[0]), dtype=np.uint8)
+    #pix_deg = 1 / 1200
+    #dlat = int(round((coords['lat'][0] - da.lat.values[0]) / pix_deg))
+    #dlon = int(round((da.lon.values[0] - coords['lon'][0]) / pix_deg))
+    #a[dlat:dlat+da.shape[0], dlon:dlon+da.shape[1]] = da.values
+    #da_reindex = xr.DataArray(a, coords=[coords['lat'], coords['lon']], dims=['lat', 'lon'])
+    #return da_reindex
 
 # This code comes from https://github.com/pydata/xarray/issues/2525
 # It should be replaced by coarsen (https://github.com/pydata/xarray/pull/2612)
@@ -72,6 +75,7 @@ def aggregate_da(da, agg_dims, suf='_agg'):
     output_core_dims = [dim + suf for dim in input_core_dims]
     output_sizes = {(dim + suf): da.shape[da.get_axis_num(dim)]//agg_dims[dim] for dim in input_core_dims}
     output_dtypes = da.dtype
+    da = da.chunk({'lat': -1, 'lon': -1})
     da_out = xr.apply_ufunc(block_reduce, da, kwargs={'block_size': block_size},
                             input_core_dims=[input_core_dims],
                             output_core_dims=[output_core_dims],
@@ -115,7 +119,7 @@ def pixel_area(pix_deg):
     project = lambda x, y: pyproj.transform(pyproj.Proj(init='epsg:4326'), pyproj.Proj(proj='cea'), x, y)
     offset = pix_deg / 2
     lts = np.arange(90-offset, -90, -pix_deg)
-    area = np.empty_like(lts)
+    area = np.empty_like(lts, dtype='float32')
     lon = 0
     for y, lat in enumerate(lts):
         pixel1 = Polygon([(lon - offset, lat + offset), (lon + offset, lat + offset), (lon + offset, lat - offset), (lon - offset, lat - offset)])
@@ -171,6 +175,15 @@ def get_path(path, gcs=None):
     else:
         return path
 
+def open_mask(mask_path, label, gcs=None):
+    ds = xr.open_zarr(get_path(f'{mask_path}/{label}', gcs))
+    da = ds['mask']
+    return da
+
+def open_masks(mask_path, labels, gcs=None):
+    das = {label: dask.delayed(open_mask)(mask_path, label, gcs) for label in labels}
+    return das
+
 def get_mask(mask_path, labels, gcs=None):
     pix_deg_flow = 1 / 1200
     das = []
@@ -198,12 +211,12 @@ def get_mask(mask_path, labels, gcs=None):
 
 def get_coarser_mask(mask, pix_deg, gcs=None):
     if type(mask) is str:
-        ds = xr.open_zarr(get_path(mask, gcs), auto_chunk=False)
+        da = xr.open_zarr(get_path(mask, gcs), auto_chunk=False)['mask']
     else:
-        ds = mask
+        da = mask
     pix_deg_flow = 1 / 1200
     ratio = int(round(pix_deg / pix_deg_flow))
-    da1 = ds['mask'].compute()
+    da1 = da#.compute()
     da2 = adjust_bbox(da1, {'lat': (pix_deg, -pix_deg_flow), 'lon': (pix_deg, pix_deg_flow)})
     da3 = aggregate_da(da2, {'lat': ratio, 'lon': ratio}) / (ratio * ratio)
     da3 = da3.rename({'lat_agg': 'lat', 'lon_agg': 'lon'})
@@ -211,23 +224,25 @@ def get_coarser_mask(mask, pix_deg, gcs=None):
     da3.lat.values = np.round(da3.lat.values / pix_deg, 1) * pix_deg
     return da3
 
-def get_trmm_mask(mask, gcs=None):
-    return get_coarser_mask(mask, 0.25, gcs)
+def get_masks(mask_path, labels, pix_deg, gcs=None):
+    das = open_masks(mask_path, labels, gcs)
+    das_coarser = {label: dask.delayed(get_coarser_mask)(das[label], pix_deg) for label in labels}
+    return dask.delayed(concat_das_along_labels)(das_coarser).compute()
 
-def get_gpm_mask(mask, gcs):
-    return get_coarser_mask(mask, 0.1, gcs)
+def concat_das_along_labels(das):
+    da = xr.concat(list(das.values()), 'label')
+    return da.assign_coords(label=list(das))
 
-def get_pet_mask(mask, gcs):
-    return get_coarser_mask(mask, 1/120, gcs)
+def get_trmm_masks(mask_path, labels, gcs=None):
+    return get_masks(mask_path, labels, 0.25, gcs)
 
-def get_watershed_p(ds_p, da_mask, da_area, tolerance):
-    da_mask = da_area.reindex_like(da_mask, method='nearest', tolerance=tolerance) * da_mask
-    da_mask = da_mask / da_mask.sum(['lat', 'lon'])
-    # clip(0) because GPM has negative values!
-    p = (ds_p.reindex_like(da_mask, method='nearest', tolerance=tolerance).clip(0) * da_mask).sum(['lat', 'lon'])
-    return p
+def get_gpm_masks(mask_path, labels, gcs=None):
+    return get_masks(mask_path, labels, 0.1, gcs)
 
-def get_ws_p(pix_deg, da_mask, da_p, tolerance=None):
+def get_pet_masks(mask_path, labels, gcs=None):
+    return get_masks(mask_path, labels, 1/120, gcs)
+
+def get_ws_p(pix_deg, da_masks, da_p, tolerance=None):
     if tolerance is None:
         s = str(pix_deg)
         tolerance = 10 ** (-(len(s) - s.find('.')))
@@ -240,12 +255,12 @@ def get_ws_p(pix_deg, da_mask, da_p, tolerance=None):
         os.makedirs(os.path.dirname(fname), exist_ok=True)
         with open(fname, 'wb') as f:
             pickle.dump(da_area, f, protocol=-1)
-    da_mask = da_area.reindex_like(da_mask, method='nearest', tolerance=tolerance) * da_mask
-    da_mask = da_mask / da_mask.sum(['lat', 'lon'])
-    p = (da_p.reindex_like(da_mask, method='nearest', tolerance=tolerance) * da_mask).sum(['lat', 'lon']).persist()
-    return p.to_series()
+    da_masks = da_area.reindex_like(da_masks, method='nearest', tolerance=tolerance) * da_masks
+    da_masks = da_masks / da_masks.sum(['lat', 'lon'])
+    p = (da_p.reindex_like(da_masks, method='nearest', tolerance=tolerance).clip(0) * da_masks).sum(['lat', 'lon']).chunk({'time': -1, 'label': 1})
+    return p
 
-def get_trmm_precipitation(from_time, to_time, da_mask, ds_p=None, gcs=None):
+def get_trmm_precipitation(from_time, to_time, da_masks, ds_p=None, gcs=None):
     if ds_p is None:
         ds_p = xr.open_zarr(gcsfs.GCSMap('pangeo-data/trmm_3b42rt', gcs))
     ds_p = ds_p.sel(time=slice(from_time, to_time))
@@ -254,14 +269,19 @@ def get_trmm_precipitation(from_time, to_time, da_mask, ds_p=None, gcs=None):
     ds_p.lon.values = np.where(long_0_360 < 180, long_0_360, long_0_360 - 360)
     ds_p = ds_p.sortby('lon')
     da_p = ds_p['precipitation']
-    return get_ws_p(0.25, da_mask, da_p)
+    p = get_ws_p(0.25, da_masks, da_p)
+    # TRMM is 3-hourly, resample to 30min and interpolate with -15min to be like GPM
+    p = p.resample(time='30min').interpolate('linear')
+    p = p.interp(time=p.time.values-np.timedelta64(15, 'm')).isel(time=slice(1, None))
+    return p
 
-def get_gpm_precipitation(from_time, to_time, da_mask, ds_p=None, gcs=None):
+def get_gpm_precipitation(from_time, to_time, da_masks, ds_p=None, gcs=None):
     if ds_p is None:
         ds_p = xr.open_zarr(gcsfs.GCSMap('pangeo-data/gpm_imerg_early', gcs))
     ds_p = ds_p.sel(time=slice(from_time, to_time))
     da_p = ds_p['precipitationCal']
-    return get_ws_p(0.1, da_mask, da_p)
+    p = get_ws_p(0.1, da_masks, da_p)
+    return p
 
 def str2datetime(s):
     if type(s) is str:
@@ -273,44 +293,62 @@ def str2datetime(s):
     else:
         return s
 
-def get_precipitation(from_time, to_time, mask, ds_trmm=None, ds_gpm=None, gcs=None):
+def get_precipitation(from_time, to_time, labels, da_trmm_mask=None, da_gpm_mask=None, chunk_time=True, zarr_path=None):
     from_time = str2datetime(from_time)
     to_time = str2datetime(to_time)
     trmm_start_time = datetime(2000, 3, 1, 12)
     gpm_start_time = datetime(2014, 3, 12)
-    from_time_gpm = from_time
-    p_trmm = None
-    p_gpm = None
-    if from_time < gpm_start_time:
-        # before GPM, take TRMM
-        if to_time > gpm_start_time:
-            to_time_trmm = gpm_start_time
-            from_time_gpm = gpm_start_time
-        else:
-            to_time_trmm = to_time
-        print('Getting TRMM precipitation from ' + str(from_time) + ' to ' + str(to_time_trmm))
-        da_trmm_mask = get_trmm_mask(mask, gcs)
-        p_trmm = get_trmm_precipitation(from_time, to_time_trmm, da_trmm_mask, ds_trmm, gcs)
-        # TRMM is 3-hourly, resample to 30min and interpolate with -15min to be like GPM
-        p_trmm = p_trmm.resample('30min').asfreq()
-        not_nan = np.isfinite(p_trmm.values)
-        idx = np.arange(len(p_trmm))
-        p_trmm[:] = np.interp(idx-0.5, idx[not_nan], p_trmm.values[not_nan]) # -0.5 translates to -30min/2 = -15min
-        p_trmm.index = p_trmm.index - timedelta(minutes=15)
-        p_trmm = p_trmm[1:]
-    if to_time > gpm_start_time:
-        # take GPM
-        print('Getting GPM precipitation from ' + str(from_time_gpm) + ' to ' + str(to_time))
-        da_gpm_mask = get_gpm_mask(mask, gcs)
-        p_gpm = get_gpm_precipitation(from_time, to_time, da_gpm_mask, ds_gpm, gcs)
-    if (p_trmm is not None) and (p_gpm is not None):
-        print('Concatenating TRMM and GPM precipitations')
-        precipitation = pd.concat([p_trmm, p_gpm])
-    elif p_trmm is not None:
-        precipitation = p_trmm
+    if chunk_time:
+        if zarr_path is not None:
+            if os.path.exists(zarr_path):
+                shutil.rmtree(zarr_path)
+        print('Getting precipitation from ' + str(from_time) + ' to ' + str(to_time))
+        t0 = from_time
+        done = False
+        while not done:
+            if t0 < gpm_start_time:
+                t1 = t0 + timedelta(days=365)
+                t1 = min(t1, gpm_start_time)
+            else:
+                t1 = t0 + timedelta(days=30)
+            if t1 >= to_time:
+                t1 = to_time
+                done = True
+            get_precipitation(t0, t1, labels, da_trmm_mask, da_gpm_mask, chunk_time=False, zarr_path=zarr_path)
+            t0 = t1
     else:
-        precipitation = p_gpm
-    return precipitation
+        from_time_gpm = from_time
+        p_trmm = None
+        p_gpm = None
+        if from_time < gpm_start_time:
+            # before GPM, take TRMM
+            if to_time > gpm_start_time:
+                to_time_trmm = gpm_start_time
+                from_time_gpm = gpm_start_time
+            else:
+                to_time_trmm = to_time
+            print('Getting TRMM precipitation from ' + str(from_time) + ' to ' + str(to_time_trmm))
+            p_trmm = get_trmm_precipitation(from_time, to_time_trmm, da_trmm_mask)
+        if to_time > gpm_start_time:
+            # take GPM
+            print('Getting GPM precipitation from ' + str(from_time_gpm) + ' to ' + str(to_time))
+            p_gpm = get_gpm_precipitation(from_time, to_time, da_gpm_mask)
+        if (p_trmm is not None) and (p_gpm is not None):
+            print('Concatenating TRMM and GPM precipitations')
+            precipitation = xr.concat([p_trmm, p_gpm], 'time')
+        elif p_trmm is not None:
+            precipitation = p_trmm
+        else:
+            precipitation = p_gpm
+        if zarr_path is not None:
+            if os.path.exists(zarr_path):
+                append_dim = 'time'
+                mode = 'a'
+            else:
+                append_dim = None
+                mode = 'w-'
+            precipitation.to_dataset(name='precipitation').to_zarr(zarr_path, mode=mode, append_dim=append_dim)
+        return precipitation
 
 def get_pet(from_time, to_time, mask, ds_pet=None, gcs=None):
     from_time = str2datetime(from_time)
@@ -319,7 +357,7 @@ def get_pet(from_time, to_time, mask, ds_pet=None, gcs=None):
     if ds_pet is None:
         ds_pet = xr.open_zarr(gcsfs.GCSMap('pangeo-data/cgiar_pet', gcs))
     da_pet = ds_pet['PET']
-    pet = get_ws_p(1/120, da_pet_mask, da_pet, tolerance=0.000001)
+    pet = get_ws_ps(1/120, da_pet_mask, da_pet, tolerance=0.000001)
     date_range = pd.date_range(start=from_time+timedelta(minutes=15), end=to_time, freq='30min')
     pet_over_time = pd.Series(index=date_range)
     for month in range(1, 13):
@@ -330,7 +368,7 @@ def get_peq_from_df(df, suffix):
     '''Get p, e and q time series from a DataFrame where these might be present with a suffix.
     Returns a DataFrame with p, e and q if they are found.
     '''
-    df_peq = DataFrame()
+    df_peq = pd.DataFrame()
     df_peq.index = df.index
     for prefix in ['p', 'e', 'q']:
         name = prefix + suffix
