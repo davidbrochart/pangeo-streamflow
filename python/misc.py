@@ -347,8 +347,8 @@ def get_precipitation(from_time, to_time, labels, da_trmm_mask=None, da_gpm_mask
             else:
                 append_dim = None
                 mode = 'w-'
-            precipitation.to_dataset(name='precipitation').to_zarr(zarr_path, mode=mode, append_dim=append_dim)
-        return precipitation
+            ds = precipitation.to_dataset(name='precipitation').compute()
+            ds.to_zarr(zarr_path, mode=mode, append_dim=append_dim)
 
 def get_pet(from_time, to_time, mask, ds_pet=None, gcs=None):
     from_time = str2datetime(from_time)
