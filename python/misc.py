@@ -257,30 +257,28 @@ def get_ws_p(pix_deg, da_masks, da_p, tolerance=None):
             pickle.dump(da_area, f, protocol=-1)
     da_masks = da_area.reindex_like(da_masks, method='nearest', tolerance=tolerance) * da_masks
     da_masks = da_masks / da_masks.sum(['lat', 'lon'])
-    p = (da_p.reindex_like(da_masks, method='nearest', tolerance=tolerance).clip(0) * da_masks).sum(['lat', 'lon']).chunk({'time': -1, 'label': 1})
+    p = (da_p.reindex_like(da_masks, method='nearest', tolerance=tolerance).clip(0) * da_masks).sum(['lat', 'lon'])
     return p
 
-def get_trmm_precipitation(from_time, to_time, da_masks, ds_p=None, gcs=None):
-    if ds_p is None:
-        ds_p = xr.open_zarr(gcsfs.GCSMap('pangeo-data/trmm_3b42rt', gcs))
+def get_trmm_precipitation(from_time, to_time, da_masks):
+    ds_p = xr.open_zarr(gcsfs.GCSMap('pangeo-data/trmm_3b42rt'))
     ds_p = ds_p.sel(time=slice(from_time, to_time))
     # TRMM data was stored with lon in 0/360 range, rearrange it in -180/180:
     long_0_360 = ds_p.lon.values
     ds_p.lon.values = np.where(long_0_360 < 180, long_0_360, long_0_360 - 360)
     ds_p = ds_p.sortby('lon')
     da_p = ds_p['precipitation']
-    p = get_ws_p(0.25, da_masks, da_p)
+    p = get_ws_p(0.25, da_masks, da_p).chunk({'time': -1, 'label': 1})
     # TRMM is 3-hourly, resample to 30min and interpolate with -15min to be like GPM
     p = p.resample(time='30min').interpolate('linear')
     p = p.interp(time=p.time.values-np.timedelta64(15, 'm')).isel(time=slice(1, None))
     return p
 
-def get_gpm_precipitation(from_time, to_time, da_masks, ds_p=None, gcs=None):
-    if ds_p is None:
-        ds_p = xr.open_zarr(gcsfs.GCSMap('pangeo-data/gpm_imerg_early', gcs))
+def get_gpm_precipitation(from_time, to_time, da_masks):
+    ds_p = xr.open_zarr(gcsfs.GCSMap('pangeo-data/gpm_imerg_early'))
     ds_p = ds_p.sel(time=slice(from_time, to_time))
     da_p = ds_p['precipitationCal']
-    p = get_ws_p(0.1, da_masks, da_p)
+    p = get_ws_p(0.1, da_masks, da_p).chunk({'time': -1, 'label': 1})
     return p
 
 def str2datetime(s):
@@ -293,7 +291,7 @@ def str2datetime(s):
     else:
         return s
 
-def get_precipitation(from_time, to_time, labels, da_trmm_mask=None, da_gpm_mask=None, chunk_time=True, zarr_path=None):
+def get_precipitation(from_time, to_time, da_trmm_mask, da_gpm_mask, zarr_path, chunk_time=True):
     from_time = str2datetime(from_time)
     to_time = str2datetime(to_time)
     trmm_start_time = datetime(2000, 3, 1, 12)
@@ -314,7 +312,7 @@ def get_precipitation(from_time, to_time, labels, da_trmm_mask=None, da_gpm_mask
             if t1 >= to_time:
                 t1 = to_time
                 done = True
-            get_precipitation(t0, t1, labels, da_trmm_mask, da_gpm_mask, chunk_time=False, zarr_path=zarr_path)
+            get_precipitation(t0, t1, da_trmm_mask, da_gpm_mask, zarr_path, chunk_time=False)
             t0 = t1
     else:
         from_time_gpm = from_time
@@ -350,18 +348,23 @@ def get_precipitation(from_time, to_time, labels, da_trmm_mask=None, da_gpm_mask
             ds = precipitation.to_dataset(name='precipitation').compute()
             ds.to_zarr(zarr_path, mode=mode, append_dim=append_dim)
 
-def get_pet(from_time, to_time, mask, ds_pet=None, gcs=None):
-    from_time = str2datetime(from_time)
-    to_time = str2datetime(to_time)
-    da_pet_mask = get_pet_mask(mask, gcs)
-    if ds_pet is None:
-        ds_pet = xr.open_zarr(gcsfs.GCSMap('pangeo-data/cgiar_pet', gcs))
-    da_pet = ds_pet['PET']
-    pet = get_ws_ps(1/120, da_pet_mask, da_pet, tolerance=0.000001)
-    date_range = pd.date_range(start=from_time+timedelta(minutes=15), end=to_time, freq='30min')
+def get_pet_for_label(date_range, label, pet):
     pet_over_time = pd.Series(index=date_range)
     for month in range(1, 13):
-        pet_over_time.loc[date_range.month==month] = pet.loc[month] / 30 / 24
+        pet_over_time.loc[date_range.month==month] = pet.sel(month=month, label=label).values / 30 / 24
+    return pet_over_time.values
+
+def get_pet(from_time, to_time, da_pet_mask, zarr_path):
+    import dask.array as da
+    from_time = str2datetime(from_time)
+    to_time = str2datetime(to_time)
+    ds_pet = xr.open_zarr(gcsfs.GCSMap('pangeo-data/cgiar_pet'))
+    da_pet = ds_pet['PET']
+    pet = get_ws_p(1/120, da_pet_mask, da_pet, tolerance=0.000001).chunk({'label': 1}).compute()
+    date_range = pd.date_range(start=from_time+timedelta(minutes=15), end=to_time, freq='30min')
+    arrays = [da.from_delayed(dask.delayed(get_pet_for_label)(date_range, label, pet), dtype='float32', shape=(len(date_range),)) for label in pet.label.values]
+    stack = da.stack(arrays, axis=0)
+    pet_over_time = xr.DataArray(stack, coords=[pet.label.values, date_range], dims=['label', 'time'])
     return pet_over_time
 
 def get_peq_from_df(df, suffix):
