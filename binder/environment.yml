@@ -1,3 +1,4 @@
+name: pangeo-streamflow
 channels:
   - conda-forge
   - defaults
@@ -23,8 +24,8 @@ dependencies:
   - bokeh
   - nbserverproxy
   - jupyter
-  - jupyterlab=0.35
-  - tornado=5.1.1
+  - jupyterlab
+  - tornado
   - lxml
   - zarr
   - intake
@@ -35,7 +36,7 @@ dependencies:
   - scikit-image
   - shapely
   - pip:
-    - dask_labextension==0.3.3
+    - dask_labextension
     - soupsieve
     - gcsfs
     - "--editable=git+https://github.com/davidbrochart/mcmc.git#egg=mcmc"
