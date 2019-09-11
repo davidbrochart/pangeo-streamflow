@@ -1,8 +1,9 @@
-name: pangeo-streamflow
+name: pangeo
 channels:
   - conda-forge
   - defaults
 dependencies:
+  - python=3.6
   - ipywidgets
   - ipyleaflet
   - numba
@@ -25,7 +26,7 @@ dependencies:
   - nbserverproxy
   - jupyter
   - jupyterlab
-  - tornado
+  - tornado=5.1.1
   - lxml
   - zarr
   - intake
@@ -36,7 +37,7 @@ dependencies:
   - scikit-image
   - shapely
   - pip:
-    - dask_labextension
+    - git+https://github.com/ian-r-rose/dask-labextension.git@de-asyncify#egg=dask_labextension
     - soupsieve
     - gcsfs
     - "--editable=git+https://github.com/davidbrochart/mcmc.git#egg=mcmc"
