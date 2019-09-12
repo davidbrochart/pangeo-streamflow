@@ -40,4 +40,4 @@ dependencies:
     - git+https://github.com/ian-r-rose/dask-labextension.git@de-asyncify#egg=dask_labextension
     - soupsieve
     - gcsfs
-    - "--editable=git+https://github.com/davidbrochart/mcmc.git#egg=mcmc"
+    - git+https://github.com/davidbrochart/mcmc.git#egg=mcmc
